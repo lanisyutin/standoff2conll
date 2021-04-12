@@ -12,7 +12,7 @@ from tagsequence import is_tag, is_start_tag, is_continue_tag, OUT_TAG
 
 # TODO: standoff.py interface should be narrower
 from standoff import Textbound, parse_textbounds, eliminate_overlaps, \
-    verify_textbounds, filter_textbounds, retag_document
+    verify_textbounds, filter_textbounds, retag_document, convert_documents
 
 # UI identifiers for supported formats
 TEXT_FORMAT = 'text'
@@ -434,3 +434,30 @@ class Document(object):
         retag_document(document, textbounds)
 
         return document
+
+    @classmethod
+    def from_standoff_to_spert(cls, text, annotations, sentence_split=True,
+                      discont_rule=None, overlap_rule=None,
+                      filter_types=None, exclude_types=None,
+                      tokenization_re=None, document_id=None):
+        """Return Document given text and standoff annotations."""
+
+        # todo: убрать костыль с исключением отношений
+        textbounds, relations = parse_textbounds(annotations, discont_rule, exclude_relations=exclude_types)
+
+        document = cls.from_text(text, sentence_split, textbounds, tokenization_re=tokenization_re)
+
+        if document_id is not None:
+            document.id = document_id
+        if filter_types:
+            textbounds = filter_textbounds(textbounds, filter_types)
+        if exclude_types:
+            textbounds = filter_textbounds(textbounds, exclude_types,
+                                           exclude=True)
+
+        verify_textbounds(textbounds, text)
+        relation_dict = {arg1: (relation, arg1, arg2) for (relation, arg1, arg2) in relations}
+        
+        docs = convert_documents(document, textbounds, relation_dict)
+
+        return docs

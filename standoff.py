@@ -4,6 +4,7 @@ import re
 from logging import warn
 
 from common import FormatError
+from common import sentence_to_tokens
 
 TEXTBOUND_LINE_RE = re.compile(r'^T\d+\t')
 
@@ -104,7 +105,7 @@ class Textbound(object):
         except ValueError as e:
             raise FormatError('Standoff: failed to parse %s' % string)
 
-def parse_textbounds(input_, discont_rule=None):
+def parse_textbounds(input_, discont_rule=None, exclude_relations=None):
     """Parse textbound annotations in input, returning a list of
     Textbound.
 
@@ -113,6 +114,7 @@ def parse_textbounds(input_, discont_rule=None):
     """
 
     textbounds = []
+    relations = []
 
     if isinstance(input_, str):
         input_ = input_.split('\n')
@@ -121,11 +123,16 @@ def parse_textbounds(input_, discont_rule=None):
         l = l.rstrip('\n')
 
         if not TEXTBOUND_LINE_RE.search(l):
+            if l.startswith('R'):
+                arr = l.split('\t')[1].split(' ')
+                if not exclude_relations or not arr[0] in exclude_relations:
+                    relations.append((arr[0], arr[1].split(':')[1], arr[2].split(':')[1]))
+
             continue
 
         textbounds.append(Textbound.from_str(l, discont_rule))
 
-    return textbounds
+    return textbounds, relations
 
 def select_eliminated_and_kept(t1, t2, overlap_rule=None):
     if overlap_rule is None:
@@ -246,3 +253,48 @@ def retag_document(document, textbounds):
 
     for sentence in document.sentences:
         _retag_sentence(sentence, offset_ann)
+
+def convert_documents(document, textbounds, relations_dict):
+    converted_documents = []
+    for sentence in document.sentences:
+        if sentence.tokens:
+            sent_end = sentence.tokens[-1].end
+            tokens = [t.text for t in sentence.tokens]
+            document = dict(tokens=tokens, entities=[], relations=[])
+            entity_idx = {}
+
+            for i in range(len(textbounds)):
+                tb = textbounds[i]
+                if tb.end <= sentence.tokens[0].start:
+                    continue
+
+                if tb.start > sent_end:
+                    continue
+
+                
+                entity_tokens = [t for t in sentence_to_tokens(tb.text) if not t.isspace()]
+                idxs = [i for i, t in enumerate(sentence.tokens) if t.start == tb.start]
+                if len(idxs) == 0:
+                    raise Exception("Not exact match! " + tb.text + " IN: " + sentence.text)
+
+                assert len(idxs) == 1, "Something goes wrong. Ambigues choice!"
+                s = idxs[0]
+                # check the rest
+                entity_idx[tb.id] = len(document['entities'])
+                document['entities'].append(dict(type=tb.type, start=s, end=s+len(entity_tokens)))
+
+            
+            for entity_id in entity_idx:
+                if relations_dict.get(entity_id):
+                    (relation, arg1, arg2) = relations_dict[entity_id]
+
+                    if not entity_idx.get(arg2):
+                        continue
+
+                    head = entity_idx[arg1]
+                    tail = entity_idx[arg2]
+                    document['relations'].append(dict(type=relation, head=head, tail=tail))
+
+            converted_documents.append(document)
+    
+    return converted_documents
